@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  proxy-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://proxy-db:27017/
+      - DATABASE_NAME=lite_proxy
+    depends_on:
+      - proxy-db
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  proxy-db:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - proxy_db_data:/data/db
+
+  proxy-admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - MONGODB_URI=mongodb://proxy-db:27017/
+      - DATABASE_NAME=lite_proxy
+    depends_on:
+      - proxy-api
+      - proxy-db
+    command: streamlit run admin/gui.py
+
+volumes:
+  proxy_db_data:
