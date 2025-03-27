@@ -1,10 +1,12 @@
 import httpx
-from fastapi import HTTPException, Header
+from fastapi import HTTPException, Header, Response, BackgroundTasks
 from starlette.requests import Request
-from typing import Optional
+from starlette.responses import StreamingResponse
+from typing import Optional, AsyncGenerator, Dict, Any
 import asyncio
 import time
 from datetime import datetime, timezone
+from json import JSONDecodeError
 
 from core.database import get_database, ProxyConfig, LogEntry
 
@@ -18,9 +20,22 @@ async def get_proxy_config(proxy_model_name: str):
 
 
 async def log_request_response(
-    request: Request, response: httpx.Response, start_time: float
+    request: Request,
+    response: httpx.Response,
+    start_time: float,
+    is_stream: bool = False,
 ):
     db = get_database()
+
+    # For streaming responses, we can't capture the full response body
+    response_body = None
+    if not is_stream and response.content:
+        try:
+            response_body = response.json()
+        except JSONDecodeError:
+            # If it's not JSON, store it as None
+            response_body = None
+
     log_entry = LogEntry(
         timestamp=datetime.now(timezone.utc),
         request_method=request.method,
@@ -31,7 +46,7 @@ async def log_request_response(
         ),
         response_status_code=response.status_code,
         response_headers=dict(response.headers),
-        response_body=response.json() if response.content else None,
+        response_body=response_body,
         processing_time=time.time() - start_time,
     )
     await db["logs"].insert_one(log_entry.model_dump())
@@ -55,63 +70,164 @@ async def proxy_request(
             f"Bearer {config.backend_api_key}"  # 优先使用配置中的 API Key
         )
 
-    # import pdb
-
-    # pdb.set_trace()
+    print(
+        f"Proxy request for model: {proxy_model_name}, backend model: {config.backend_model_name}"
+    )
+    print(f"Backend URL: {backend_url}")
+    print(f"Headers: {headers}")
 
     async with httpx.AsyncClient(verify=not config.ignore_ssl_verify) as client:
         start_time = time.time()
-        # if request.method == "POST":
-        #     body = await request.json()
-        #     pdb.set_trace()
-        #     # 将代理模型名称替换为后端模型名称
-        #     body["model"] = config.backend_model_name
-        #     response = await client.post(
-        #         backend_url, headers=headers, json=body, timeout=None
+        # try:
+        #     if request.method == "POST":
+        #         body = await request.json()
+        #         # 将代理模型名称替换为后端模型名称
+        #         body["model"] = config.backend_model_name
+
+        #         # Check if this is a streaming request
+        #         is_stream = body.get("stream", False)
+        #         print(f"Request body: {body}")
+        #         print(f"Is streaming request: {is_stream}")
+
+        #         if is_stream:
+        #             print("Handling streaming request...")
+        #             # For streaming responses, we need to use client.stream and return a StreamingResponse
+        #             return await handle_streaming_request(client, backend_url, headers, body, request, start_time, config)
+        #         else:
+        #             print("Handling regular request...")
+        #             # Regular non-streaming request
+        #             response = await client.post(
+        #                 backend_url, headers=headers, json=body, timeout=None
+        #             )
+        #     elif request.method == "GET":
+        #         print("Handling GET request...")
+        #         response = await client.get(
+        #             backend_url,
+        #             headers=headers,
+        #             params=request.query_params,
+        #             timeout=None,
+        #         )
+        #     else:
+        #         raise HTTPException(status_code=405, detail="Method not allowed.")
+
+        #     # Log the non-streaming response
+        #     await log_request_response(request, response, start_time, is_stream=False)
+
+        #     if response.status_code >= 400:
+        #         raise HTTPException(
+        #             status_code=response.status_code, detail=response.json()
+        #         )
+
+        #     return response.json()
+        # except httpx.ConnectError as e:
+        #     raise HTTPException(
+        #         status_code=503,
+        #         detail=f"Could not connect to backend: {config.base_url}. Error: {e}",
         #     )
-        # pdb.set_trace()
-        try:
-            if request.method == "POST":
-                body = await request.json()
-                # pdb.set_trace()
-                # 将代理模型名称替换为后端模型名称
-                body["model"] = config.backend_model_name
+        # except Exception as e:
+        #     raise HTTPException(
+        #         status_code=500, detail=f"An unexpected error occurred: {e}"
+        #     )
+
+        if request.method == "POST":
+            body = await request.json()
+            # 将代理模型名称替换为后端模型名称
+            body["model"] = config.backend_model_name
+
+            # Check if this is a streaming request
+            is_stream = body.get("stream", False)
+            print(f"Request body: {body}")
+            print(f"Is streaming request: {is_stream}")
+
+            if is_stream:
+                print("Handling streaming request...")
+                # For streaming responses, we need to use client.stream and return a StreamingResponse
+                return await handle_streaming_request(
+                    client, backend_url, headers, body, request, start_time, config
+                )
+            else:
+                print("Handling regular request...")
+                # Regular non-streaming request
                 response = await client.post(
                     backend_url, headers=headers, json=body, timeout=None
                 )
-                # pdb.set_trace()
-            elif request.method == "GET":
-                response = await client.get(
-                    backend_url,
-                    headers=headers,
-                    params=request.query_params,
-                    timeout=None,
+        elif request.method == "GET":
+            print("Handling GET request...")
+            response = await client.get(
+                backend_url,
+                headers=headers,
+                params=request.query_params,
+                timeout=None,
+            )
+        else:
+            raise HTTPException(status_code=405, detail="Method not allowed.")
+
+        # Log the non-streaming response
+        await log_request_response(request, response, start_time, is_stream=False)
+        # if response.status_code >= 400:
+        #     raise HTTPException(
+        #         status_code=response.status_code, detail=response.json()
+        #     )
+
+        response.raise_for_status()
+
+        return response.json()
+
+
+async def handle_streaming_request(
+    client, backend_url, headers, body, request, start_time, config
+):
+    """Handle streaming requests and return a StreamingResponse"""
+    # Create a new client specifically for streaming to avoid closure issues
+    stream_client = httpx.AsyncClient(verify=not config.ignore_ssl_verify)
+
+    async def stream_generator():
+        try:
+            async with stream_client.stream(
+                "POST", backend_url, headers=headers, json=body, timeout=None
+            ) as response:
+                # Log the streaming response (without body content)
+                await log_request_response(
+                    request, response, start_time, is_stream=True
                 )
-            else:
-                raise HTTPException(status_code=405, detail="Method not allowed.")
 
-            # print(response.json())
-            # import pdb
+                if response.status_code >= 400:
+                    # For error responses, we need to read the full response and raise an exception
+                    error_content = await response.read()
+                    try:
+                        error_json = response.json()
+                        error_detail = error_json
+                    except Exception:
+                        error_detail = error_content.decode("utf-8")
 
-            # pdb.set_trace()
+                    raise HTTPException(
+                        status_code=response.status_code, detail=error_detail
+                    )
 
-            await log_request_response(request, response, start_time)
+                # Stream the response back to the client
+                async for chunk in response.aiter_bytes():
+                    yield chunk
 
-            if response.status_code >= 400:
-                raise HTTPException(
-                    status_code=response.status_code, detail=response.json()
-                )
-
-            return response.json()
         except httpx.ConnectError as e:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Could not connect to backend: {config.base_url}. Error: {e}",
-            )
+            error_msg = f"Could not connect to backend: {config.base_url}. Error: {e}"
+            yield f'data: {{"error": "{error_msg}"}}\n\n'.encode("utf-8")
         except Exception as e:
-            raise HTTPException(
-                status_code=500, detail=f"An unexpected error occurred: {e}"
-            )
+            error_msg = f"An unexpected error occurred: {e}"
+            yield f'data: {{"error": "{error_msg}"}}\n\n'.encode("utf-8")
+        finally:
+            # Make sure to close the client when done
+            await stream_client.aclose()
+
+    # Return a StreamingResponse with the appropriate content type
+    response = StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+    # Add a background task to close the client when the response is complete
+    # This ensures the client stays open during streaming but is properly closed after
+    return response
 
 
 async def proxy_models_request(

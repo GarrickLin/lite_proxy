@@ -1,6 +1,7 @@
 import streamlit as st
 from core.database import connect_db, close_db, get_database, ProxyConfig
-from typing import List, Optional
+from typing import Optional
+import asyncio
 
 
 async def fetch_configs():
@@ -77,7 +78,7 @@ async def delete_config(proxy_model_name: str):
         return False
 
 
-async def main():
+async def amain():
     st.subheader("Current Configurations")
     await connect_db()
     configs = await fetch_configs()
@@ -175,3 +176,7 @@ async def main():
             if await delete_config(delete_proxy_model_name):
                 st.rerun()
     await close_db()
+
+
+def main():
+    asyncio.run(amain())
