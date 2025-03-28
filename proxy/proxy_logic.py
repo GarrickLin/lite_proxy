@@ -1,12 +1,12 @@
 import httpx
-from fastapi import HTTPException, Header, Response, BackgroundTasks
+from fastapi import HTTPException, Header, Response
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
-from typing import Optional, AsyncGenerator, Dict, Any
-import asyncio
+from typing import Optional
 import time
 from datetime import datetime, timezone
 from json import JSONDecodeError
+import json
 
 from core.database import get_database, ProxyConfig, LogEntry
 
@@ -27,23 +27,39 @@ async def log_request_response(
 ):
     db = get_database()
 
-    # For streaming responses, we can't capture the full response body
+    # 处理响应体
     response_body = None
     if not is_stream and response.content:
         try:
             response_body = response.json()
         except JSONDecodeError:
-            # If it's not JSON, store it as None
-            response_body = None
+            try:
+                # 如果不是JSON，尝试将其作为文本存储
+                response_body = response.text
+            except Exception:
+                # 如果无法解码为文本，则存储为None
+                response_body = None
+
+    # 尝试获取请求体
+    request_body = None
+    if request.method in ["POST", "PUT"]:
+        try:
+            request_body = await request.json()
+        except JSONDecodeError:
+            try:
+                # 尝试获取原始请求体
+                body_bytes = await request.body()
+                request_body = body_bytes.decode("utf-8")
+            except Exception:
+                # 如果无法解码，则存储为None
+                request_body = None
 
     log_entry = LogEntry(
         timestamp=datetime.now(timezone.utc),
         request_method=request.method,
         request_path=request.url.path,
         request_headers=dict(request.headers),
-        request_body=(
-            await request.json() if request.method in ["POST", "PUT"] else None
-        ),
+        request_body=request_body,
         response_status_code=response.status_code,
         response_headers=dict(response.headers),
         response_body=response_body,
@@ -75,103 +91,80 @@ async def proxy_request(
     )
     print(f"Backend URL: {backend_url}")
     print(f"Headers: {headers}")
+    import pdb
 
-    async with httpx.AsyncClient(verify=not config.ignore_ssl_verify) as client:
-        start_time = time.time()
-        # try:
-        #     if request.method == "POST":
-        #         body = await request.json()
-        #         # 将代理模型名称替换为后端模型名称
-        #         body["model"] = config.backend_model_name
+    try:
+        async with httpx.AsyncClient(verify=not config.ignore_ssl_verify) as client:
+            start_time = time.time()
+            if request.method == "POST":
+                body = await request.json()
+                # 将代理模型名称替换为后端模型名称
+                body["model"] = config.backend_model_name
 
-        #         # Check if this is a streaming request
-        #         is_stream = body.get("stream", False)
-        #         print(f"Request body: {body}")
-        #         print(f"Is streaming request: {is_stream}")
+                # Check if this is a streaming request
+                is_stream = body.get("stream", False)
+                print(f"Request body: {body}")
+                print(f"Is streaming request: {is_stream}")
 
-        #         if is_stream:
-        #             print("Handling streaming request...")
-        #             # For streaming responses, we need to use client.stream and return a StreamingResponse
-        #             return await handle_streaming_request(client, backend_url, headers, body, request, start_time, config)
-        #         else:
-        #             print("Handling regular request...")
-        #             # Regular non-streaming request
-        #             response = await client.post(
-        #                 backend_url, headers=headers, json=body, timeout=None
-        #             )
-        #     elif request.method == "GET":
-        #         print("Handling GET request...")
-        #         response = await client.get(
-        #             backend_url,
-        #             headers=headers,
-        #             params=request.query_params,
-        #             timeout=None,
-        #         )
-        #     else:
-        #         raise HTTPException(status_code=405, detail="Method not allowed.")
-
-        #     # Log the non-streaming response
-        #     await log_request_response(request, response, start_time, is_stream=False)
-
-        #     if response.status_code >= 400:
-        #         raise HTTPException(
-        #             status_code=response.status_code, detail=response.json()
-        #         )
-
-        #     return response.json()
-        # except httpx.ConnectError as e:
-        #     raise HTTPException(
-        #         status_code=503,
-        #         detail=f"Could not connect to backend: {config.base_url}. Error: {e}",
-        #     )
-        # except Exception as e:
-        #     raise HTTPException(
-        #         status_code=500, detail=f"An unexpected error occurred: {e}"
-        #     )
-
-        if request.method == "POST":
-            body = await request.json()
-            # 将代理模型名称替换为后端模型名称
-            body["model"] = config.backend_model_name
-
-            # Check if this is a streaming request
-            is_stream = body.get("stream", False)
-            print(f"Request body: {body}")
-            print(f"Is streaming request: {is_stream}")
-
-            if is_stream:
-                print("Handling streaming request...")
-                # For streaming responses, we need to use client.stream and return a StreamingResponse
-                return await handle_streaming_request(
-                    client, backend_url, headers, body, request, start_time, config
+                if is_stream:
+                    print("Handling streaming request...")
+                    # For streaming responses, we need to use client.stream and return a StreamingResponse
+                    return await handle_streaming_request(
+                        client, backend_url, headers, body, request, start_time, config
+                    )
+                else:
+                    print("Handling regular request...")
+                    # Regular non-streaming request
+                    response = await client.post(
+                        backend_url, headers=headers, json=body, timeout=None
+                    )
+            elif request.method == "GET":
+                print("Handling GET request...")
+                response = await client.get(
+                    backend_url,
+                    headers=headers,
+                    params=request.query_params,
+                    timeout=None,
                 )
             else:
-                print("Handling regular request...")
-                # Regular non-streaming request
-                response = await client.post(
-                    backend_url, headers=headers, json=body, timeout=None
+                raise HTTPException(status_code=405, detail="Method not allowed.")
+
+            # Log the non-streaming response
+            await log_request_response(request, response, start_time, is_stream=False)
+
+            # 不使用 raise_for_status，而是检查状态码并相应处理
+            if response.status_code >= 400:
+                # 保留原始状态码，不转换为 500
+                error_content = response.text
+                try:
+                    error_detail = response.json()
+                except Exception:
+                    error_detail = error_content
+
+                # 返回与原始响应相同的状态码
+                return Response(
+                    content=json.dumps(error_detail),
+                    status_code=response.status_code,
+                    media_type="application/json",
                 )
-        elif request.method == "GET":
-            print("Handling GET request...")
-            response = await client.get(
-                backend_url,
-                headers=headers,
-                params=request.query_params,
-                timeout=None,
-            )
-        else:
-            raise HTTPException(status_code=405, detail="Method not allowed.")
 
-        # Log the non-streaming response
-        await log_request_response(request, response, start_time, is_stream=False)
-        # if response.status_code >= 400:
-        #     raise HTTPException(
-        #         status_code=response.status_code, detail=response.json()
-        #     )
+            return response.json()
 
-        response.raise_for_status()
-
-        return response.json()
+    except httpx.RequestError as e:
+        # 网络错误等
+        return Response(
+            content=json.dumps({"error": f"Connection error: {str(e)}"}),
+            status_code=503,
+            media_type="application/json",
+        )
+    except Exception as e:
+        # 其他未预期的错误
+        print(f"Unexpected error in proxy_request: {e}")
+        return Response(
+            content=json.dumps({"error": f"Unexpected error: {str(e)}"}),
+            status_code=500,
+            media_type="application/json",
+        )
 
 
 async def handle_streaming_request(
@@ -181,18 +174,32 @@ async def handle_streaming_request(
     # Create a new client specifically for streaming to avoid closure issues
     stream_client = httpx.AsyncClient(verify=not config.ignore_ssl_verify)
 
+    # 用于收集流式响应的所有数据
+    collected_chunks = []
+
     async def stream_generator():
         try:
             async with stream_client.stream(
                 "POST", backend_url, headers=headers, json=body, timeout=None
             ) as response:
-                # Log the streaming response (without body content)
+                # 先记录初始响应（不包含完整内容）
                 await log_request_response(
                     request, response, start_time, is_stream=True
                 )
 
+                # 获取数据库连接，用于更新日志
+                db = get_database()
+                log_id = None
+
+                # 查找刚刚创建的日志记录
+                latest_log = await db["logs"].find_one(
+                    {"request_path": request.url.path}, sort=[("timestamp", -1)]
+                )
+                if latest_log:
+                    log_id = latest_log["_id"]
+
                 if response.status_code >= 400:
-                    # For error responses, we need to read the full response and raise an exception
+                    # 对于错误响应，我们需要读取完整响应并抛出异常
                     error_content = await response.read()
                     try:
                         error_json = response.json()
@@ -204,9 +211,33 @@ async def handle_streaming_request(
                         status_code=response.status_code, detail=error_detail
                     )
 
-                # Stream the response back to the client
+                # 流式返回响应给客户端，同时收集所有块
                 async for chunk in response.aiter_bytes():
+                    collected_chunks.append(chunk)
                     yield chunk
+
+                # 在流式传输完成后，更新日志记录以包含完整的响应内容
+                if log_id and collected_chunks:
+                    try:
+                        # 尝试将所有块合并为一个完整的响应
+                        full_response = b"".join(collected_chunks).decode("utf-8")
+
+                        # 尝试解析为JSON
+                        try:
+                            response_json = json.loads(full_response)
+                            # 更新日志记录
+                            await db["logs"].update_one(
+                                {"_id": log_id},
+                                {"$set": {"response_body": response_json}},
+                            )
+                        except JSONDecodeError:
+                            # 如果不是JSON，存储为字符串
+                            await db["logs"].update_one(
+                                {"_id": log_id},
+                                {"$set": {"response_body": full_response}},
+                            )
+                    except Exception as e:
+                        print(f"更新流式响应日志时出错: {e}")
 
         except httpx.ConnectError as e:
             error_msg = f"Could not connect to backend: {config.base_url}. Error: {e}"

@@ -179,4 +179,9 @@ async def amain():
 
 
 def main():
+    # st.title("Configuration Management")
     asyncio.run(amain())
+
+
+if __name__ == "__main__":
+    main()

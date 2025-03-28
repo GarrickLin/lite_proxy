@@ -70,8 +70,7 @@ async def send_message(proxy_model: str, message: str, stream: bool = True):
 
 
 def main():
-    st.subheader("异步对话")
-
+    # st.title("异步对话")
     # Run async functions in synchronous context
     asyncio.run(connect_db())
     configs = asyncio.run(fetch_configs())
@@ -130,3 +129,7 @@ def main():
             st.session_state.conversation_history.append(
                 {"role": "assistant", "content": full_response}
             )
+
+
+if __name__ == "__main__":
+    main()
