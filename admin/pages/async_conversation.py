@@ -3,6 +3,10 @@ import asyncio
 from openai import AsyncOpenAI, OpenAI
 from core.database import connect_db, close_db, get_database, ProxyConfig
 from typing import AsyncGenerator
+import os
+
+
+proxy_api_url = os.getenv("PROXY_API_URL", "http://localhost:8000/v1")
 
 
 async def fetch_configs():
@@ -18,7 +22,7 @@ async def send_message_stream(
     try:
         # Create an AsyncOpenAI client pointing to our local proxy
         client = AsyncOpenAI(
-            base_url="http://localhost:8000/v1",
+            base_url=proxy_api_url,
             api_key="not-needed",  # The proxy doesn't require an API key
         )
 

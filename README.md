@@ -27,7 +27,7 @@
 1. 克隆仓库
 
 ```bash
-git clone https://github.com/yourusername/lite_proxy.git
+git clone https://github.com/garricklin/lite_proxy.git
 cd lite_proxy
 ```
 
@@ -48,7 +48,9 @@ DATABASE_NAME=lite_proxy
 
 ## 使用方法
 
-### 启动代理服务
+### 方式一：直接启动
+
+#### 启动代理服务
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -56,13 +58,37 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 服务将在 `http://localhost:8000` 上运行。
 
-### 启动管理界面
+#### 启动管理界面
 
 ```bash
 streamlit run admin/gui.py
 ```
 
 管理界面将在 `http://localhost:8501` 上运行。
+
+### 方式二：Docker Compose启动
+
+项目已经配置好了 Docker Compose，可以一键启动所有服务：
+
+```bash
+# 构建并启动所有服务
+$ docker compose up -d
+
+# 查看运行状态
+$ docker compose ps
+
+# 查看日志
+$ docker compose logs -f
+
+# 停止服务
+$ docker compose down
+```
+
+Docker Compose 将启动以下三个服务：
+
+- **proxy-api**：API 代理服务，运行在 http://localhost:8000
+- **proxy-admin**：管理界面，运行在 http://localhost:8501
+- **proxy-db**：MongoDB 数据库，运行在 localhost:27017
 
 ### API 使用示例
 

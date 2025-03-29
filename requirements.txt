@@ -6,3 +6,4 @@ python-dotenv
 motor
 httpx
 loguru
+openai

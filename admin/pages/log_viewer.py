@@ -89,9 +89,13 @@ def process_stream_data(data):
                     # 提取content字段
                     if 'choices' in json_obj and len(json_obj['choices']) > 0:
                         if 'delta' in json_obj['choices'][0] and 'content' in json_obj['choices'][0]['delta']:
-                            combined_content += json_obj['choices'][0]['delta']['content']
+                            content = json_obj['choices'][0]['delta']['content']
+                            if content is not None:  # Check if content is None before concatenating
+                                combined_content += content
                         elif 'text' in json_obj['choices'][0]:
-                            combined_content += json_obj['choices'][0]['text']
+                            text = json_obj['choices'][0]['text']
+                            if text is not None:  # Also check if text is None before concatenating
+                                combined_content += text
                 except json.JSONDecodeError:
                     pass  # 忽略无法解析的块
     

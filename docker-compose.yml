@@ -1,6 +1,10 @@
-version: '3.8'
-
 services:
+  proxy-db:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - proxy_db_data:/data/db
   proxy-api:
     build:
       context: .
@@ -13,14 +17,6 @@ services:
     depends_on:
       - proxy-db
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-  proxy-db:
-    image: mongo:latest
-    ports:
-      - "27017:27017"
-    volumes:
-      - proxy_db_data:/data/db
-
   proxy-admin:
     build:
       context: .
@@ -30,6 +26,8 @@ services:
     environment:
       - MONGODB_URI=mongodb://proxy-db:27017/
       - DATABASE_NAME=lite_proxy
+      - PROXY_API_URL=http://proxy-api:8000/v1
+      - TZ=Asia/Shanghai
     depends_on:
       - proxy-api
       - proxy-db
