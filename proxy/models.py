@@ -122,7 +122,7 @@ class ChatCompletionRequest(BaseModel):
     """https://platform.openai.com/docs/api-reference/chat/create"""
 
     model: str
-    messages: List[Union[ChatMessage, Dict]]
+    messages: List[Union[ChatMessage, Dict[str, str]]]
     frequency_penalty: Optional[float] = 0
     logit_bias: Optional[Dict[str, int]] = None
     logprobs: Optional[bool] = False
@@ -145,10 +145,10 @@ class ChatCompletionRequest(BaseModel):
     functions: Optional[List[FunctionSchema]] = None
     function_call: Optional[FunctionCallChoice] = None
 
-    @field_validator("messages", mode="before")
-    @classmethod
-    def cast_all_messages(cls, v):
-        return [cast_message_to_subtype(m) if isinstance(m, dict) else m for m in v]
+    # @field_validator("messages", mode="before")
+    # @classmethod
+    # def cast_all_messages(cls, v):
+    #     return [cast_message_to_subtype(m) if isinstance(m, dict) else m for m in v]
 
 
 class FunctionCall(BaseModel):
